@@ -1,0 +1,18 @@
+mappings:
+  - pattern: "apps/inventory/**/*.py"
+    notes_file: "notes/inventory.md"
+    section: "inventory-app"
+  - pattern: "apps/orders/**/*.py"
+    notes_file: "notes/orders.md"
+    section: "orders-app"
+  - pattern: "frontend/src/components/**/*.tsx"
+    notes_file: "notes/frontend.md"
+    section: "components"
+
+ignore:
+  - "notes/**"
+  - ".git/**"
+  - ".notes/**"
+  - "**/migrations/**"
+  - "**/*.lock"
+  - "**/__pycache__/**"
