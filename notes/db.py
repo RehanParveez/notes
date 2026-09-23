@@ -160,3 +160,27 @@ def log_activity(
       "VALUES (?, ?, ?, ?, ?)",
       (project_id, file_path, status, detail, _now()),
     )
+    
+def upsert_notes_index(
+  project_id: int,
+  notes_file: str,
+  section: str,
+  db_path: str | Path = DEFAULT_DB_PATH,
+) -> None:
+  with get_connection(db_path) as conn:
+    conn.execute(
+      """
+        INSERT INTO notes_index (project_id, notes_file, section, last_updated_at)
+        VALUES (?, ?, ?, ?)
+        ON CONFLICT(project_id, notes_file, section)
+        DO UPDATE SET last_updated_at = excluded.last_updated_at
+      """,
+        (project_id, notes_file, section, _now()),
+    )
+    
+def get_project_by_id(project_id: int, db_path: str | Path = DEFAULT_DB_PATH) -> dict | None:
+  with get_connection(db_path) as conn:
+    row = conn.execute(
+      "SELECT * FROM projects WHERE id = ?", (project_id,)
+    ).fetchone()
+    return dict(row) if row else None

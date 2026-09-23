@@ -32,5 +32,5 @@ def run():
   return all_passed
  
 if __name__ == "__main__":
-    run()
+  run()
  
