@@ -8,6 +8,7 @@ from notes.pipeline import process_file_change
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from notes import db
+from notes.bulk_guard import BulkGuard
 
 log = logging.getLogger("notes.watcher")
 
@@ -17,6 +18,7 @@ class _ProjectHandler(FileSystemEventHandler):
     project_id: int,
     project_root: Path,
     debouncer: Debouncer,
+    bulk_guard: BulkGuard,
     db_path: str | Path | None = None,
     template_path: str | Path | None = None,
   ):
@@ -25,6 +27,7 @@ class _ProjectHandler(FileSystemEventHandler):
     self.project_id = project_id
     self.project_root = project_root
     self.debouncer = debouncer
+    self.bulk_guard = bulk_guard
     self.db_path = db_path
     self.template_path = template_path
 
@@ -48,39 +51,66 @@ class _ProjectHandler(FileSystemEventHandler):
 
     if not absolute_path.is_file():
       return
+    
+    if self.bulk_guard.record(self.project_id, relative_path):
+  
+      flagged = self.bulk_guard.consume_flagged(self.project_id)
+      if flagged:
+        detail = f"bulk change detected ({len(flagged)} files) — skipped AI, review manually"
+        try:
+          kwargs = {"db_path": self.db_path} if self.db_path is not None else {}
+          db.log_activity(
+            self.project_id,
+            "(bulk)",
+            "skipped",
+            detail,
+            **kwargs,
+          )
+          log.warning(
+            "Bulk change project_id=%s files=%d — AI skipped",
+              self.project_id,
+              len(flagged),
+          )
+        except Exception:
+          log.exception("Failed to log bulk-change event")
+      return
 
     key = f"{self.project_id}:{relative_path}"
-
-    self.debouncer.call(
-      key,
-      self._process_change,
-      relative_path,
+    self.debouncer.call(key, self._process_change, relative_path,
     )
 
   def _process_change(self, _key: str, relative_path: str) -> None:
-    try:
-      result = process_file_change(
-        project_id=self.project_id,
-        project_root=self.project_root,
-        relative_path=relative_path,
-        db_path=self.db_path,
-        template_path=self.template_path,
-      )
-
-      log.info(
-        "Processed project_id=%s file=%s status=%s detail=%s",
-        self.project_id,
-        relative_path,
-        result.get("status"),
-        result.get("detail"),
-      )
-
-    except Exception:
-      log.exception(
-        "Unhandled error processing project_id=%s file=%s",
+    if self.bulk_guard.is_in_cooldown(self.project_id):
+      log.debug(
+        "Dropping debounced event during bulk cooldown project_id=%s file=%s",
         self.project_id,
         relative_path,
       )
+      return
+
+    try: 
+      result = process_file_change( 
+        project_id=self.project_id, 
+        project_root=self.project_root, 
+        relative_path=relative_path, 
+        db_path=self.db_path, 
+        template_path=self.template_path, 
+      ) 
+ 
+      log.info( 
+        "Processed project_id=%s file=%s status=%s detail=%s", 
+        self.project_id, 
+        relative_path, 
+        result.get("status"), 
+        result.get("detail"), 
+      ) 
+ 
+    except Exception: 
+      log.exception( 
+        "Unhandled error processing project_id=%s file=%s", 
+        self.project_id, 
+        relative_path, 
+      ) 
 
   def on_created(self, event) -> None:
     if event.is_directory:
@@ -123,6 +153,8 @@ class MultiProjectWatcher:
   def __init__(
     self,
     debounce_seconds: float = 1.0,
+    bulk_window: float = 3.0, 
+    bulk_threshold: int = 8, 
     db_path: str | Path | None = None,
     template_path: str | Path | None = None,
     refresh_interval: float = 30.0,
@@ -133,6 +165,8 @@ class MultiProjectWatcher:
     self.refresh_interval = refresh_interval
     self._observer = Observer()
     self._debouncer = Debouncer(delay=debounce_seconds)
+    self._bulk_guard = BulkGuard(window_seconds=bulk_window, threshold=bulk_threshold, 
+    ) 
     self._watched: dict[int, object] = {}
     self._lock = threading.Lock()
     self._stop = threading.Event()
@@ -167,6 +201,7 @@ class MultiProjectWatcher:
           project_id=pid,
           project_root=root,
           debouncer=self._debouncer,
+          bulk_guard=self._bulk_guard,
           db_path=self.db_path,
           template_path=self.template_path,
         )
@@ -191,14 +226,17 @@ class MultiProjectWatcher:
     )
     self._refresh_thread.start()
     log.info(
-      "Watcher started (debounce=%.1fs refresh=%.0fs)",
+      "Watcher started (debounce=%.1fs bulk_window=%.1fs bulk_threshold=%d refresh=%.0fs)", 
       self.debounce_seconds,
+      self._bulk_guard.window_seconds, 
+      self._bulk_guard.threshold, 
       self.refresh_interval,
     )
 
   def stop(self) -> None:
     self._stop.set()
     self._debouncer.cancel_all()
+    self._bulk_guard.reset() 
     self._observer.stop()
     self._observer.join(timeout=5)
     log.info("Watcher stopped")
