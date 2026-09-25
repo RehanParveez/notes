@@ -9,6 +9,7 @@ from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler
 from notes import db
 from notes.bulk_guard import BulkGuard
+from notes.lock import is_paused
 
 log = logging.getLogger("notes.watcher")
 
@@ -80,6 +81,14 @@ class _ProjectHandler(FileSystemEventHandler):
     )
 
   def _process_change(self, _key: str, relative_path: str) -> None:
+    if is_paused(self.db_path):
+      log.debug(
+        "Globally paused — dropping event project_id=%s file=%s",
+        self.project_id,
+        relative_path,
+      )
+      return
+    
     if self.bulk_guard.is_in_cooldown(self.project_id):
       log.debug(
         "Dropping debounced event during bulk cooldown project_id=%s file=%s",

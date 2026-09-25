@@ -6,6 +6,8 @@ from pathlib import Path
 import sys
 from notes import db
 from notes.pipeline import process_file_change
+from notes.config_check import validate_all
+from notes.lock import pause as lock_pause, resume as lock_resume
 
 def setup_logging(verbose: bool = False) -> None:
   level = logging.DEBUG if verbose else logging.INFO
@@ -17,6 +19,10 @@ def setup_logging(verbose: bool = False) -> None:
 
 def cmd_watch(args) -> None:
   setup_logging(args.verbose)
+  report = validate_all()
+  for name, problems in report.items():
+    for p in problems:
+      logging.getLogger("notes.main").warning("[%s] %s", name, p)
   watcher = MultiProjectWatcher(
     debounce_seconds=args.debounce,
     template_path=args.template,
@@ -48,6 +54,26 @@ def cmd_once(args) -> None:
     print("\n--- prompt ---\n")
     print(result["prompt"])
 
+def cmd_validate(args) -> None:
+  setup_logging(args.verbose)
+  report = validate_all()
+  if not report:
+    print("All active projects look good.")
+    return
+  print("Problems found:\n")
+  for name, problems in report.items():
+    print(f"{name}:")
+    for p in problems:
+      print(f"  - {p}")
+      
+def cmd_pause(args) -> None:
+  lock_pause()
+  print("notes-sync paused globally — file changes will be ignored until you resume.")
+
+def cmd_resume(args) -> None:
+  lock_resume()
+  print("notes-sync resumed.")
+
 def main() -> None:
   parser = argparse.ArgumentParser(description="notes-sync")
   parser.add_argument("--debounce", type=float, default=1.0)
@@ -62,11 +88,21 @@ def main() -> None:
   p_once.add_argument("-v", "--verbose", action="store_true")
   p_once.set_defaults(func=cmd_once)
 
+  p_validate = sub.add_parser("validate", help="Check all active projects' notes-map.yml")
+  p_pause = sub.add_parser("pause", help="Globally pause all AI processing")
+  p_pause.set_defaults(func=cmd_pause)
+
+  p_resume = sub.add_parser("resume", help="Resume after a global pause")
+  p_resume.set_defaults(func=cmd_resume)
+  p_validate.add_argument("-v", "--verbose", action="store_true")
+  p_validate.set_defaults(func=cmd_validate)
+
   args = parser.parse_args()
-  if getattr(args, "command", None) == "once":
+  command = getattr(args, "command", None)
+  if command in ("once", "pause", "resume", "validate"):
     args.func(args)
   else:
     cmd_watch(args)
 
 if __name__ == "__main__":
-    main()
+  main()

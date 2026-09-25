@@ -59,7 +59,8 @@ def process_file_change(
       return result
 
     resolver = MappingResolver(map_path)
-    mapping = resolver.resolve(relative_path)
+    rule = resolver.resolve_rule(relative_path)
+    mapping = (rule.notes_file, rule.section) if rule else None
     if mapping is None:
       result["status"] = "skipped"
       result["detail"] = "path ignored or unmatched by notes-map.yml"
@@ -69,6 +70,7 @@ def process_file_change(
       return result
 
     notes_file, section = mapping
+    review_required = bool(rule.review)
     diff = unified_diff(old_content, new_content, relative_path)
 
     notes_abs = project_root / notes_file
@@ -90,6 +92,21 @@ def process_file_change(
       return result
 
     updated_body = generate(prompt)
+    
+    if review_required:
+      patch_id = db.add_pending_patch(
+        project_id, relative_path, notes_file, section, diff, updated_body, **kwargs
+      )
+      db.set_snapshot(project_id, relative_path, new_content, **kwargs)
+      db.touch_project(project_id, **kwargs)
+      detail = f"queued for review as patch #{patch_id}"
+      db.log_activity(project_id, relative_path, "skipped", detail, **kwargs)
+      result["status"] = "pending_review"
+      result["detail"] = detail
+      result["notes_file"] = notes_file
+      result["section"] = section
+      result["patch_id"] = patch_id
+      return result
 
     written = apply_section_patch(
       notes_file=notes_file,

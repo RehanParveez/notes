@@ -47,6 +47,19 @@ CREATE TABLE IF NOT EXISTS activity_log (
   detail TEXT,
   timestamp TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS pending_patches (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  project_id INTEGER NOT NULL REFERENCES projects(id),
+  file_path TEXT NOT NULL,
+  notes_file TEXT NOT NULL,
+  section TEXT NOT NULL,
+  diff TEXT NOT NULL,
+  proposed_body TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  created_at TEXT NOT NULL
+);
+
 """
 def _now() -> str:
   return datetime.now(timezone.utc).isoformat()
@@ -184,3 +197,51 @@ def get_project_by_id(project_id: int, db_path: str | Path = DEFAULT_DB_PATH) ->
       "SELECT * FROM projects WHERE id = ?", (project_id,)
     ).fetchone()
     return dict(row) if row else None
+  
+def add_pending_patch(
+  project_id: int,
+  file_path: str,
+  notes_file: str,
+  section: str,
+  diff: str,
+  proposed_body: str,
+  db_path: str | Path = DEFAULT_DB_PATH,
+) -> int:
+  with get_connection(db_path) as conn:
+    cur = conn.execute(
+      "INSERT INTO pending_patches "
+      "(project_id, file_path, notes_file, section, diff, proposed_body, status, created_at) "
+      "VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)",
+      (project_id, file_path, notes_file, section, diff, proposed_body, _now()),
+    )
+    return cur.lastrowid
+
+def list_pending_patches(
+  project_id: int | None = None,
+  status: str = "pending",
+  db_path: str | Path = DEFAULT_DB_PATH,
+) -> list[dict]:
+  with get_connection(db_path) as conn:
+    if project_id is not None:
+      rows = conn.execute(
+        "SELECT * FROM pending_patches WHERE status = ? AND project_id = ? ORDER BY created_at",
+        (status, project_id),
+      ).fetchall()
+    else:
+      rows = conn.execute(
+        "SELECT * FROM pending_patches WHERE status = ? ORDER BY created_at",
+        (status,),
+      ).fetchall()
+    return [dict(r) for r in rows]
+
+def get_pending_patch(patch_id: int, db_path: str | Path = DEFAULT_DB_PATH) -> dict | None:
+  with get_connection(db_path) as conn:
+    row = conn.execute(
+      "SELECT * FROM pending_patches WHERE id = ?", (patch_id,)
+    ).fetchone()
+    return dict(row) if row else None
+
+def resolve_pending_patch(patch_id: int, status: str, db_path: str | Path = DEFAULT_DB_PATH) -> None:
+  """status: 'approved' | 'rejected'"""
+  with get_connection(db_path) as conn:
+    conn.execute("UPDATE pending_patches SET status = ? WHERE id = ?", (status, patch_id))

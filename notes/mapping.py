@@ -41,6 +41,7 @@ class MappingRule:
   pattern: str
   notes_file: str
   section: str
+  review: bool = False
   _regex: re.Pattern = field(init=False, repr=False)
  
   def __post_init__(self):
@@ -56,7 +57,7 @@ class MappingResolver:
       raw = yaml.safe_load(f) or {}
             
     self.rules = [
-      MappingRule(pattern=m["pattern"], notes_file=m["notes_file"], section=m["section"])
+      MappingRule(pattern=m["pattern"], notes_file=m["notes_file"], section=m["section"], review=bool(m.get("review", False)),)
       for m in raw.get("mappings", [])
     ]
     self._ignore_regexes = [_pattern_to_regex(p) for p in raw.get("ignore", [])]
@@ -65,11 +66,15 @@ class MappingResolver:
     relative_path = relative_path.replace("\\", "/")
     return any(rx.match(relative_path) for rx in self._ignore_regexes)
 
-  def resolve(self, relative_path: str) -> tuple[str, str] | None:
+  def resolve_rule(self, relative_path: str) -> MappingRule | None:
     relative_path = relative_path.replace("\\", "/")
     if self.is_ignored(relative_path):
       return None
     for rule in self.rules:
       if rule.matches(relative_path):
-        return rule.notes_file, rule.section
+        return rule
     return None
+  
+  def resolve(self, relative_path: str) -> tuple[str, str] | None:
+    rule = self.resolve_rule(relative_path)
+    return (rule.notes_file, rule.section) if rule else None
